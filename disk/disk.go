@@ -24,6 +24,8 @@ type Disk interface {
 
 type MemDisk []Block
 
+var _ Disk = MemDisk(nil)
+
 func NewMemDisk(numBlocks int) MemDisk {
 	disk := make([]Block, numBlocks)
 	for i := range disk {
@@ -42,6 +44,8 @@ func (d MemDisk) Write(a int, v Block) {
 	}
 	d[a] = v
 }
+
+func (d MemDisk) Barrier() {}
 
 var implicitDisk Disk
 

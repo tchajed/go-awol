@@ -2,7 +2,7 @@ package log
 
 import "../disk"
 
-type Log struct {}
+type Log struct{}
 
 // MaxTxnWrites is a guaranteed reservation for each transaction.
 const MaxTxnWrites = 10 // 10 is completely arbitrary

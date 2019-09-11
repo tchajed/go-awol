@@ -10,6 +10,8 @@ type FileDisk struct {
 	numBlocks int
 }
 
+var _ Disk = FileDisk{}
+
 func NewFileDisk(path string, numBlocks int) (FileDisk, error) {
 	f, err := os.Create(path)
 	if err != nil {
