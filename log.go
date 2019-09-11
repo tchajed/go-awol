@@ -12,9 +12,9 @@ const MaxTxnWrites = 10 // 10 is completely arbitrary
 const logLength = 1 + 2*MaxTxnWrites
 
 type Log struct {
-	cache map[int]disk.Block
+	cache map[uint64]disk.Block
 	// length of current transaction, in blocks
-	length *int
+	length *uint64
 }
 
 // New initializes a fresh log
@@ -23,10 +23,10 @@ func New() Log {
 	if diskSize <= logLength {
 		panic("disk is too small to host log")
 	}
-	cache := make(map[int]disk.Block)
+	cache := make(map[uint64]disk.Block)
 	header := intToBlock(0)
 	disk.Write(0, header)
-	lengthPtr := new(int)
+	lengthPtr := new(uint64)
 	*lengthPtr = 0
 	return Log{cache: cache, length: lengthPtr}
 }
@@ -45,7 +45,7 @@ func (l Log) BeginTxn() bool {
 // Read from the logical disk.
 //
 // Reads must go through the log to return committed but un-applied writes.
-func (l Log) Read(a int) disk.Block {
+func (l Log) Read(a uint64) disk.Block {
 	v, ok := l.cache[a]
 	if ok {
 		return v
@@ -53,23 +53,23 @@ func (l Log) Read(a int) disk.Block {
 	return disk.Read(logLength + a)
 }
 
-func (l Log) Size() int {
+func (l Log) Size() uint64 {
 	return disk.Size() - logLength
 }
 
-func intToBlock(a int) disk.Block {
+func intToBlock(a uint64) disk.Block {
 	b := make([]byte, disk.BlockSize)
-	machine.UInt64Put(b, uint64(a))
+	machine.UInt64Put(b, a)
 	return b
 }
 
-func blockToInt(v disk.Block) int {
+func blockToInt(v disk.Block) uint64 {
 	a := machine.UInt64Get(v)
-	return int(a)
+	return a
 }
 
 // Write to the disk through the log.
-func (l Log) Write(a int, v disk.Block) {
+func (l Log) Write(a uint64, v disk.Block) {
 	length := *l.length
 	if length >= MaxTxnWrites {
 		panic("transaction is at capacity")
@@ -89,7 +89,7 @@ func (l Log) Commit() {
 	disk.Write(0, header)
 }
 
-func getLogEntry(logOffset int) (int, disk.Block) {
+func getLogEntry(logOffset uint64) (uint64, disk.Block) {
 	diskAddr := 1 + 2*logOffset
 	aBlock := disk.Read(diskAddr)
 	a := blockToInt(aBlock)
@@ -97,8 +97,8 @@ func getLogEntry(logOffset int) (int, disk.Block) {
 	return a, v
 }
 
-func applyLog(length int) {
-	for i := 0; ; {
+func applyLog(length uint64) {
+	for i := uint64(0); ; {
 		if i < length {
 			a, v := getLogEntry(i)
 			disk.Write(logLength+a, v)
@@ -133,8 +133,8 @@ func Open() Log {
 	applyLog(length)
 	clearLog()
 
-	cache := make(map[int]disk.Block)
-	lengthPtr := new(int)
+	cache := make(map[uint64]disk.Block)
+	lengthPtr := new(uint64)
 	*lengthPtr = 0
 	return Log{cache: cache, length: lengthPtr}
 }

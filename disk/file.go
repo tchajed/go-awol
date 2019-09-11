@@ -7,12 +7,12 @@ import (
 
 type FileDisk struct {
 	f         *os.File
-	numBlocks int
+	numBlocks uint64
 }
 
 var _ Disk = FileDisk{}
 
-func NewFileDisk(path string, numBlocks int) (FileDisk, error) {
+func NewFileDisk(path string, numBlocks uint64) (FileDisk, error) {
 	f, err := os.Create(path)
 	if err != nil {
 		return FileDisk{}, err
@@ -33,11 +33,11 @@ func OpenFileDisk(path string) (FileDisk, error) {
 	if err != nil {
 		return FileDisk{}, err
 	}
-	numBlocks := int(finfo.Size()) / BlockSize
+	numBlocks := uint64(finfo.Size()) / BlockSize
 	return FileDisk{f, numBlocks}, nil
 }
 
-func (d FileDisk) Read(a int) Block {
+func (d FileDisk) Read(a uint64) Block {
 	buf := make([]byte, BlockSize)
 	if a >= d.numBlocks {
 		panic("out-of-bounds read")
@@ -49,8 +49,8 @@ func (d FileDisk) Read(a int) Block {
 	return buf
 }
 
-func (d FileDisk) Write(a int, v Block) {
-	if len(v) != BlockSize {
+func (d FileDisk) Write(a uint64, v Block) {
+	if uint64(len(v)) != BlockSize {
 		panic(fmt.Errorf("v is not block sized (%d bytes)", len(v)))
 	}
 	if a > d.numBlocks {
@@ -62,7 +62,7 @@ func (d FileDisk) Write(a int, v Block) {
 	}
 }
 
-func (d FileDisk) Size() int {
+func (d FileDisk) Size() uint64 {
 	return d.numBlocks
 }
 

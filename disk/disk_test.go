@@ -53,7 +53,7 @@ func (suite *DiskSuite) TestReadWrite() {
 }
 
 func (suite *DiskSuite) TestSize() {
-	suite.Equal(100, Size())
+	suite.Equal(uint64(100), Size())
 }
 
 func (suite *DiskSuite) TestBarrier() {
