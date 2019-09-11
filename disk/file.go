@@ -39,7 +39,7 @@ func OpenFileDisk(path string) (FileDisk, error) {
 
 func (d FileDisk) Read(a int) Block {
 	buf := make([]byte, BlockSize)
-	if a > d.numBlocks {
+	if a >= d.numBlocks {
 		panic("out-of-bounds read")
 	}
 	_, err := d.f.ReadAt(buf, int64(a*BlockSize))
