@@ -1,8 +1,11 @@
 package disk
 
 import (
+	"fmt"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 )
@@ -39,6 +42,8 @@ var block2 Block = make([]byte, BlockSize)
 func init() {
 	block1[0] = 1
 	block2[0] = 2
+	rand.Seed(time.Now().UnixNano())
+	diskPath += fmt.Sprintf("%d", rand.Int())
 }
 
 func (suite *DiskSuite) TestReadWrite() {

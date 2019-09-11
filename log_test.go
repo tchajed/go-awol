@@ -1,8 +1,11 @@
 package awol
 
 import (
+	"fmt"
+	"math/rand"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/suite"
 
@@ -43,6 +46,8 @@ var block2 disk.Block = make([]byte, disk.BlockSize)
 func init() {
 	block1[0] = 1
 	block2[0] = 2
+	rand.Seed(time.Now().UnixNano())
+	diskPath += fmt.Sprintf("%d", rand.Int())
 }
 
 func (suite *LogSuite) TestBasicLogWrite() {
@@ -152,25 +157,26 @@ func (suite *LogSuite) TestCommitAfterCrash() {
 
 func (suite *LogSuite) TestBoundaryWrite() {
 	l := suite.Log
+	lastAddr := l.Size() - 1
 	l.BeginTxn()
 	for i := 0; i < MaxTxnWrites; i++ {
-		l.Write(l.Size(), block1)
+		l.Write(lastAddr, block1)
 	}
 	l.Commit()
 	l.Apply()
 	l.Apply()
 	l = Open()
 
-	suite.Equal(block1, l.Read(l.Size()))
+	suite.Equal(block1, l.Read(lastAddr))
 
 	l.BeginTxn()
 	for i := 0; i < MaxTxnWrites; i++ {
-		l.Write(l.Size(), block2)
+		l.Write(lastAddr, block2)
 	}
 	l.Commit()
 	l.Apply()
 	l.Apply()
 	l = Open()
 
-	suite.Equal(block2, l.Read(l.Size()))
+	suite.Equal(block2, l.Read(lastAddr))
 }
