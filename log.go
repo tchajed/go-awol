@@ -1,6 +1,6 @@
-package log
+package awol
 
-import "../disk"
+import "./disk"
 
 type Log struct{}
 
