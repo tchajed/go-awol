@@ -19,30 +19,15 @@ type Log struct {
 
 // New initializes a fresh log
 func New() Log {
-	cache := make(map[int]disk.Block)
-	return Log{cache: cache}
-}
-
-func readLog(length int, cache map[int]disk.Block) {
-	for i := 0; ; {
-		if i < length {
-			a, v := getLogEntry(i)
-			cache[a] = v
-			i = i + 1
-			continue
-		}
-		break
+	diskSize := disk.Size()
+	if diskSize <= logLength {
+		panic("disk is too small to host log")
 	}
-}
-
-// Open recovers the log following a crash or shutdown
-func Open() Log {
-	header := disk.Read(0)
-	length := blockToInt(header)
 	cache := make(map[int]disk.Block)
-	readLog(length, cache)
+	header := intToBlock(0)
+	disk.Write(0, header)
 	lengthPtr := new(int)
-	*lengthPtr = length
+	*lengthPtr = 0
 	return Log{cache: cache, length: lengthPtr}
 }
 
@@ -66,6 +51,10 @@ func (l Log) Read(a int) disk.Block {
 		return v
 	}
 	return disk.Read(logLength + a)
+}
+
+func (l Log) Size() int {
+	return disk.Size() - logLength
 }
 
 func intToBlock(a int) disk.Block {
@@ -108,19 +97,44 @@ func getLogEntry(logOffset int) (int, disk.Block) {
 	return a, v
 }
 
-// Apply all the committed transactions.
-//
-// Frees all the space in the log.
-func (l Log) Apply() {
-	length := *l.length
+func applyLog(length int) {
 	for i := 0; ; {
 		if i < length {
 			a, v := getLogEntry(i)
-			disk.Write(a, v)
+			disk.Write(logLength+a, v)
 			i = i + 1
 			continue
 		}
 		break
 	}
+}
+func clearLog() {
+	header := intToBlock(0)
+	disk.Write(0, header)
+}
+
+// Apply all the committed transactions.
+//
+// Frees all the space in the log.
+func (l Log) Apply() {
+	length := *l.length
+	applyLog(length)
+	clearLog()
 	*l.length = 0
+	// technically the log cache is no longer needed, but it is still valid;
+	// clearing it might make verification easier,
+	// depending on the exact invariants
+}
+
+// Open recovers the log following a crash or shutdown
+func Open() Log {
+	header := disk.Read(0)
+	length := blockToInt(header)
+	applyLog(length)
+	clearLog()
+
+	cache := make(map[int]disk.Block)
+	lengthPtr := new(int)
+	*lengthPtr = 0
+	return Log{cache: cache, length: lengthPtr}
 }

@@ -62,6 +62,10 @@ func (d FileDisk) Write(a int, v Block) {
 	}
 }
 
+func (d FileDisk) Size() int {
+	return d.numBlocks
+}
+
 func (d FileDisk) Barrier() {
 	err := d.f.Sync()
 	if err != nil {
@@ -71,7 +75,7 @@ func (d FileDisk) Barrier() {
 
 func (d FileDisk) Close() {
 	err := d.f.Close()
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 }

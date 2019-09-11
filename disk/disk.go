@@ -10,10 +10,17 @@ const BlockSize int = 4096
 // Disk provides access to a logical block-based disk
 type Disk interface {
 	// Read reads a disk block by address
+	//
+	// Expects a < Size().
 	Read(a int) Block
 
 	// Write updates a disk block by address
+	//
+	// Expects a < Size().
 	Write(a int, v Block)
+
+	// Size reports how big the disk is, in blocks
+	Size() int
 
 	// Barrier ensures data is persisted.
 	//
@@ -45,6 +52,10 @@ func (d MemDisk) Write(a int, v Block) {
 	d[a] = v
 }
 
+func (d MemDisk) Size() int {
+	return len(d)
+}
+
 func (d MemDisk) Barrier() {}
 
 var implicitDisk Disk
@@ -62,6 +73,11 @@ func Read(a int) Block {
 // Write (see the Disk documentation)
 func Write(a int, v Block) {
 	implicitDisk.Write(a, v)
+}
+
+// Size (see the Disk documentation)
+func Size() int {
+	return implicitDisk.Size()
 }
 
 // Barrier (see the Disk documentation)

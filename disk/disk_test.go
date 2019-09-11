@@ -28,6 +28,10 @@ func (suite *DiskSuite) TearDownTest() {
 	_ = os.Remove(diskPath)
 }
 
+func TestDiskSuite(t *testing.T) {
+	suite.Run(t, new(DiskSuite))
+}
+
 var block0 Block = make([]byte, BlockSize)
 var block1 Block = make([]byte, BlockSize)
 var block2 Block = make([]byte, BlockSize)
@@ -43,6 +47,10 @@ func (suite *DiskSuite) TestReadWrite() {
 	suite.Equal(block0, Read(2))
 	suite.Equal(block1, Read(3))
 	suite.Equal(block2, Read(4))
+}
+
+func (suite *DiskSuite) TestSize() {
+	suite.Equal(100, Size())
 }
 
 func (suite *DiskSuite) TestBarrier() {
@@ -65,8 +73,4 @@ func (suite *DiskSuite) TestCrash() {
 
 	suite.Equal(block1, Read(2))
 	suite.Equal(block0, Read(3))
-}
-
-func TestDiskSuite(t *testing.T) {
-	suite.Run(t, new(DiskSuite))
 }
