@@ -1,6 +1,6 @@
 package awol
 
-import "./disk"
+import "github.com/tchajed/go-awol/disk"
 
 type Log struct{}
 
