@@ -68,3 +68,10 @@ func (d FileDisk) Barrier() {
 		panic("file sync failed: " + err.Error())
 	}
 }
+
+func (d FileDisk) Close() {
+	err := d.f.Close()
+	if err != nil{
+		panic(err)
+	}
+}
