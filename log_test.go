@@ -2,7 +2,6 @@ package awol
 
 import (
 	"fmt"
-	"math/rand"
 	"os"
 	"testing"
 	"time"
@@ -46,8 +45,7 @@ var block2 disk.Block = make([]byte, disk.BlockSize)
 func init() {
 	block1[0] = 1
 	block2[0] = 2
-	rand.Seed(time.Now().UnixNano())
-	diskPath += fmt.Sprintf("%d", rand.Int())
+	diskPath += fmt.Sprintf(".%d", time.Now().UnixNano()/1000%1000)
 }
 
 func (suite *LogSuite) TestBasicLogWrite() {
