@@ -7,9 +7,9 @@ import (
 )
 
 // MaxTxnWrites is a guaranteed reservation for each transaction.
-const MaxTxnWrites = 10 // 10 is completely arbitrary
+const MaxTxnWrites uint64 = 10 // 10 is completely arbitrary
 
-const logLength = 1 + 2*MaxTxnWrites
+const logLength uint64 = 1 + 2*MaxTxnWrites
 
 type Log struct {
 	cache map[uint64]disk.Block

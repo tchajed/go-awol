@@ -157,7 +157,7 @@ func (suite *LogSuite) TestBoundaryWrite() {
 	l := suite.Log
 	lastAddr := l.Size() - 1
 	l.BeginTxn()
-	for i := 0; i < MaxTxnWrites; i++ {
+	for i := uint64(0); i < MaxTxnWrites; i++ {
 		l.Write(lastAddr, block1)
 	}
 	l.Commit()
@@ -168,7 +168,7 @@ func (suite *LogSuite) TestBoundaryWrite() {
 	suite.Equal(block1, l.Read(lastAddr))
 
 	l.BeginTxn()
-	for i := 0; i < MaxTxnWrites; i++ {
+	for i := uint64(0); i < MaxTxnWrites; i++ {
 		l.Write(lastAddr, block2)
 	}
 	l.Commit()
