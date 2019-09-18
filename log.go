@@ -17,6 +17,17 @@ type Log struct {
 	length *uint64
 }
 
+func intToBlock(a uint64) disk.Block {
+	b := make([]byte, disk.BlockSize)
+	machine.UInt64Put(b, a)
+	return b
+}
+
+func blockToInt(v disk.Block) uint64 {
+	a := machine.UInt64Get(v)
+	return a
+}
+
 // New initializes a fresh log
 func New() Log {
 	diskSize := disk.Size()
@@ -50,22 +61,13 @@ func (l Log) Read(a uint64) disk.Block {
 	if ok {
 		return v
 	}
-	return disk.Read(logLength + a)
+	dv := disk.Read(logLength + a)
+	return dv
 }
 
 func (l Log) Size() uint64 {
-	return disk.Size() - logLength
-}
-
-func intToBlock(a uint64) disk.Block {
-	b := make([]byte, disk.BlockSize)
-	machine.UInt64Put(b, a)
-	return b
-}
-
-func blockToInt(v disk.Block) uint64 {
-	a := machine.UInt64Get(v)
-	return a
+	sz := disk.Size()
+	return sz - logLength
 }
 
 // Write to the disk through the log.
