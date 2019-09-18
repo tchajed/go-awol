@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/tchajed/go-awol/disk"
+	"github.com/tchajed/goose/machine/disk"
 )
 
 type LogSuite struct {

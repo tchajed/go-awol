@@ -3,7 +3,7 @@ package awol
 import (
 	"github.com/tchajed/goose/machine"
 
-	"github.com/tchajed/go-awol/disk"
+	"github.com/tchajed/goose/machine/disk"
 )
 
 // MaxTxnWrites is a guaranteed reservation for each transaction.
