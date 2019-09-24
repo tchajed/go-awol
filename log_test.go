@@ -178,3 +178,18 @@ func (suite *LogSuite) TestBoundaryWrite() {
 
 	suite.Equal(block2, l.Read(lastAddr))
 }
+
+func BenchmarkLogCommit(b *testing.B) {
+	disk.Init(disk.NewMemDisk(10000))
+	l := New()
+	block := make([]byte, disk.BlockSize)
+	block[0] = 1
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for a := 0; a < 3; a++ {
+			l.Write(uint64(a), block)
+		}
+		l.Commit()
+		l.Apply()
+	}
+}
