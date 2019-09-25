@@ -23,7 +23,9 @@ type Log struct {
 	// protects cache and length
 	l     *sync.RWMutex
 	addrs *[]uint64
-	cache map[uint64]disk.Block
+	// TODO: this is a pointer only to support clearing it
+	// maybe we want dedicated support for the map clearing idiom
+	cache *map[uint64]disk.Block
 	// length of current transaction, in blocks
 	length *uint64
 }
@@ -50,12 +52,14 @@ func New() Log {
 	addrPtr := new([]uint64)
 	*addrPtr = addrs
 	cache := make(map[uint64]disk.Block)
+	cachePtr := new(map[uint64]disk.Block)
+	*cachePtr = cache
 	header := intToBlock(0)
 	disk.Write(0, header)
 	lengthPtr := new(uint64)
 	*lengthPtr = 0
 	l := new(sync.RWMutex)
-	return Log{l: l, addrs: addrPtr, cache: cache, length: lengthPtr}
+	return Log{l: l, addrs: addrPtr, cache: cachePtr, length: lengthPtr}
 }
 
 func (l Log) lock() {
@@ -85,7 +89,8 @@ func (l Log) BeginTxn() bool {
 // Reads must go through the log to return committed but un-applied writes.
 func (l Log) Read(a uint64) disk.Block {
 	l.lock()
-	v, ok := l.cache[a]
+	cache := *l.cache
+	v, ok := cache[a]
 	if ok {
 		l.unlock()
 		return v
@@ -105,6 +110,12 @@ func (l Log) Size() uint64 {
 // Write to the disk through the log.
 func (l Log) Write(a uint64, v disk.Block) {
 	l.lock()
+	cache := *l.cache
+	_, ok := cache[a]
+	if ok {
+		l.unlock()
+		return
+	}
 	length := *l.length
 	if length >= MaxTxnWrites {
 		panic("transaction is at capacity")
@@ -114,7 +125,7 @@ func (l Log) Write(a uint64, v disk.Block) {
 	newAddrs := append(addrs, a)
 	*l.addrs = newAddrs
 	disk.Write(nextAddr+1, v)
-	l.cache[a] = v
+	cache[a] = v
 	*l.length = length + 1
 	l.unlock()
 }
@@ -198,12 +209,11 @@ func (l Log) Apply() {
 	applyLog(addrs)
 	newAddrs := make([]uint64, 0)
 	*l.addrs = newAddrs
+	newCache := make(map[uint64]disk.Block)
+	*l.cache = newCache
 	clearLog()
 	*l.length = 0
 	l.unlock()
-	// technically the log cache is no longer needed, but it is still valid;
-	// clearing it might make verification easier,
-	// depending on the exact invariants
 }
 
 // Open recovers the log following a crash or shutdown
@@ -217,8 +227,10 @@ func Open() Log {
 	clearLog()
 
 	cache := make(map[uint64]disk.Block)
+	cachePtr := new(map[uint64]disk.Block)
+	*cachePtr = cache
 	lengthPtr := new(uint64)
 	*lengthPtr = 0
 	l := new(sync.RWMutex)
-	return Log{l: l, addrs: addrPtr, cache: cache, length: lengthPtr}
+	return Log{l: l, addrs: addrPtr, cache: cachePtr, length: lengthPtr}
 }
