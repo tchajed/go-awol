@@ -23,9 +23,7 @@ type Log struct {
 	// protects cache and length
 	l     *sync.RWMutex
 	addrs *[]uint64
-	// TODO: this is a pointer only to support clearing it
-	// maybe we want dedicated support for the map clearing idiom
-	cache *map[uint64]disk.Block
+	cache map[uint64]disk.Block
 	// length of current transaction, in blocks
 	length *uint64
 }
@@ -52,14 +50,12 @@ func New() Log {
 	addrPtr := new([]uint64)
 	*addrPtr = addrs
 	cache := make(map[uint64]disk.Block)
-	cachePtr := new(map[uint64]disk.Block)
-	*cachePtr = cache
 	header := intToBlock(0)
 	disk.Write(0, header)
 	lengthPtr := new(uint64)
 	*lengthPtr = 0
 	l := new(sync.RWMutex)
-	return Log{l: l, addrs: addrPtr, cache: cachePtr, length: lengthPtr}
+	return Log{l: l, addrs: addrPtr, cache: cache, length: lengthPtr}
 }
 
 func (l Log) lock() {
@@ -77,6 +73,8 @@ func (l Log) BeginTxn() bool {
 	l.lock()
 	length := *l.length
 	if length == 0 {
+		// note that we don't actually reserve this space,
+		// so BeginTxn doesn't ensure anything about transactions succeeding
 		l.unlock()
 		return true
 	}
@@ -89,8 +87,7 @@ func (l Log) BeginTxn() bool {
 // Reads must go through the log to return committed but un-applied writes.
 func (l Log) Read(a uint64) disk.Block {
 	l.lock()
-	cache := *l.cache
-	v, ok := cache[a]
+	v, ok := l.cache[a]
 	if ok {
 		l.unlock()
 		return v
@@ -110,8 +107,7 @@ func (l Log) Size() uint64 {
 // Write to the disk through the log.
 func (l Log) Write(a uint64, v disk.Block) {
 	l.lock()
-	cache := *l.cache
-	_, ok := cache[a]
+	_, ok := l.cache[a]
 	if ok {
 		l.unlock()
 		return
@@ -125,7 +121,7 @@ func (l Log) Write(a uint64, v disk.Block) {
 	newAddrs := append(addrs, a)
 	*l.addrs = newAddrs
 	disk.Write(nextAddr+1, v)
-	cache[a] = v
+	l.cache[a] = v
 	*l.length = length + 1
 	l.unlock()
 }
@@ -209,8 +205,10 @@ func (l Log) Apply() {
 	applyLog(addrs)
 	newAddrs := make([]uint64, 0)
 	*l.addrs = newAddrs
-	newCache := make(map[uint64]disk.Block)
-	*l.cache = newCache
+	cache := l.cache
+	for k := range cache {
+		delete(cache, k)
+	}
 	clearLog()
 	*l.length = 0
 	l.unlock()
@@ -227,10 +225,8 @@ func Open() Log {
 	clearLog()
 
 	cache := make(map[uint64]disk.Block)
-	cachePtr := new(map[uint64]disk.Block)
-	*cachePtr = cache
 	lengthPtr := new(uint64)
 	*lengthPtr = 0
 	l := new(sync.RWMutex)
-	return Log{l: l, addrs: addrPtr, cache: cachePtr, length: lengthPtr}
+	return Log{l: l, addrs: addrPtr, cache: cache, length: lengthPtr}
 }
