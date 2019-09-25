@@ -186,6 +186,10 @@ func BenchmarkLogCommit(b *testing.B) {
 	block[0] = 1
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		ok := l.BeginTxn()
+		if !ok {
+			b.Fatalf("could not allocate %dth transaction", i)
+		}
 		for a := 0; a < 3; a++ {
 			l.Write(uint64(a), block)
 		}
