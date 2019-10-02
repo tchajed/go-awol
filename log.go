@@ -4,229 +4,267 @@ import (
 	"sync"
 
 	"github.com/tchajed/goose/machine"
-
 	"github.com/tchajed/goose/machine/disk"
 )
 
-// MaxTxnWrites is a guaranteed reservation for each transaction.
-const MaxTxnWrites uint64 = 10 // 10 is completely arbitrary
+// the header has 4096-8-8 bytes for addresses, each of which are 8 bytes long
+const logLength = (disk.BlockSize - 8 - 8) / 8 // = 510
 
-// assumes MaxTwnWrites addresses fit into one block;
-// this holds when MaxTxnWrites <= 4096/8 = 512
-// (actually the total number of writes in the log needs to be <= 512,
-// which would be different if we supported group commit of multiple
-// transactions)
+const dataStart = 1 + logLength
 
-const logLength = 1 + 1 + MaxTxnWrites
+type Op struct {
+	addrs  []uint64
+	blocks []disk.Block
+}
+
+type Hdr struct {
+	start  uint64
+	length uint64
+	addrs  []uint64 // is always logLength long
+}
 
 type Log struct {
-	// protects cache and length
-	l     *sync.RWMutex
-	addrs *[]uint64
-	cache map[uint64]disk.Block
-	// length of current transaction, in blocks
-	length *uint64
+	l       sync.RWMutex
+	pending []Op
+
+	// seqNum of the last committed transaction
+	seqNum      uint
+	hdr         Hdr
+	applyLength uint64
+	logData     []disk.Block
+
+	applyLock sync.RWMutex
 }
 
-func intToBlock(a uint64) disk.Block {
-	b := make([]byte, disk.BlockSize)
-	machine.UInt64Put(b, a)
-	return b
+func encodeHdr(hdr Hdr) disk.Block {
+	if uint64(len(hdr.addrs)) != logLength {
+		panic("header ill-formed")
+	}
+	// TODO: we could do better by re-using a fixed buffer for every
+	//  encoding, as long as that buffer was protected by a lock
+	block := make(disk.Block, disk.BlockSize)
+	machine.UInt64Put(block[0:0+8], hdr.start)
+	machine.UInt64Put(block[8:8+8], hdr.length)
+	for i := uint64(0); i < logLength; i++ {
+		offset := (2 + i) * 8
+		machine.UInt64Put(block[offset:offset+8], hdr.addrs[i])
+	}
+	return block
 }
 
-func blockToInt(v disk.Block) uint64 {
-	a := machine.UInt64Get(v)
-	return a
+func decodeHdr(b disk.Block) Hdr {
+	start := machine.UInt64Get(b[0 : 0+8])
+	count := machine.UInt64Get(b[8 : 8+8])
+	addrs := make([]uint64, logLength)
+	for i := uint64(0); i < logLength; i++ {
+		offset := (2 + i) * 8
+		addrs[i] = machine.UInt64Get(b[offset : offset+8])
+	}
+	return Hdr{start: start, length: count, addrs: addrs}
 }
+
+// forall hdr:: blockToHdr(hdrToBlock(hdr)) == hdr
 
 // New initializes a fresh log
-func New() Log {
-	diskSize := disk.Size()
-	if diskSize <= logLength {
+func New() *Log {
+	if disk.Size() <= dataStart {
 		panic("disk is too small to host log")
 	}
-
-	addrs := make([]uint64, 0)
-	addrPtr := new([]uint64)
-	*addrPtr = addrs
-	cache := make(map[uint64]disk.Block)
-	header := intToBlock(0)
-	disk.Write(0, header)
-	lengthPtr := new(uint64)
-	*lengthPtr = 0
-	l := new(sync.RWMutex)
-	return Log{l: l, addrs: addrPtr, cache: cache, length: lengthPtr}
-}
-
-func (l Log) lock() {
-	l.l.Lock()
-}
-
-func (l Log) unlock() {
-	l.l.Unlock()
-}
-
-// BeginTxn allocates space for a new transaction in the log.
-//
-// Returns true if the allocation succeeded.
-func (l Log) BeginTxn() bool {
-	l.lock()
-	length := *l.length
-	if length == 0 {
-		// note that we don't actually reserve this space,
-		// so BeginTxn doesn't ensure anything about transactions succeeding
-		l.unlock()
-		return true
+	logData := make([]disk.Block, logLength)
+	addrs := make([]uint64, logLength)
+	block0 := make(disk.Block, 4096)
+	for i := uint64(0); i < logLength; i++ {
+		logData[i] = block0
+		disk.Write(0, block0)
 	}
-	l.unlock()
-	return false
+	hdr := Hdr{start: 0, length: 0, addrs: addrs}
+	disk.Write(0, encodeHdr(hdr))
+
+	return &Log{hdr: hdr, logData: logData}
+}
+
+func (l Log) Begin() *Op {
+	return &Op{}
+}
+
+func (l Log) logRead(a0 uint64) (disk.Block, bool) {
+	for i := 0; i < int(l.hdr.length); i++ {
+		if l.hdr.addrs[i] == a0 {
+			return l.logData[int(l.hdr.start)+i], true
+		}
+	}
+	return nil, false
 }
 
 // Read from the logical disk.
 //
 // Reads must go through the log to return committed but un-applied writes.
 func (l Log) Read(a uint64) disk.Block {
-	l.lock()
-	v, ok := l.cache[a]
+	l.l.RLock()
+	defer l.l.RUnlock()
+	v, ok := l.logRead(a)
 	if ok {
-		l.unlock()
 		return v
 	}
-	// TODO: maybe safe to unlock before reading from disk?
-	l.unlock()
-	dv := disk.Read(logLength + a)
+	dv := disk.Read(dataStart + a)
 	return dv
 }
 
-func (l Log) Size() uint64 {
-	// atomic, so safe to do lock-free
-	sz := disk.Size()
-	return sz - logLength
+func (l Log) Size() int {
+	return int(disk.Size() - dataStart)
 }
 
-// Write to the disk through the log.
-func (l Log) Write(a uint64, v disk.Block) {
-	l.lock()
-	_, ok := l.cache[a]
-	if ok {
-		l.unlock()
-		return
-	}
-	length := *l.length
-	if length >= MaxTxnWrites {
-		panic("transaction is at capacity")
-	}
-	nextAddr := 1 + 1 + length
-	addrs := *l.addrs
-	newAddrs := append(addrs, a)
-	*l.addrs = newAddrs
-	disk.Write(nextAddr+1, v)
-	l.cache[a] = v
-	*l.length = length + 1
-	l.unlock()
+func (l Log) BeginOp() Op {
+	return Op{}
 }
 
-// encodeAddrs produces a disk block that encodes the addresses in the log
-func (l Log) encodeAddrs() disk.Block {
-	length := *l.length
-	addrs := *l.addrs
-	aBlock := make([]byte, 4096)
-	for i := uint64(0); ; {
-		if i < length {
-			ai := addrs[i]
-			machine.UInt64Put(aBlock[i*8:(i+1)*8], ai)
-			i = i + 1
-			continue
+// Write to an in-progress transaction
+func (op *Op) Write(a uint64, v disk.Block) {
+	// TODO: absorption
+	op.addrs = append(op.addrs, a)
+	op.blocks = append(op.blocks, v)
+}
+
+func (op *Op) length() int {
+	return len(op.addrs)
+}
+
+func (op *Op) Valid() bool {
+	return uint64(op.length()) < logLength
+}
+
+// splitTxns finds a number of ops n such that ops[:n] have at most
+// maxLen blocks
+func splitTxns(ops []Op, maxLen int) int {
+	length := 0
+	for i, op := range ops {
+		opLen := op.length()
+		if length+opLen > maxLen {
+			return i
 		}
-		break
+		length += opLen
 	}
-	return aBlock
+	// all of the transactions fit
+	return len(ops)
 }
 
-// decodeAddrs reads the address disk block and decodes it into length addresses
-func decodeAddrs(length uint64) []uint64 {
-	addrs := make([]uint64, length)
-	aBlock := disk.Read(1)
-	for i := uint64(0); ; {
-		if i < length {
-			a := machine.UInt64Get(aBlock[i*8 : (i+1)*8])
-			addrs[i] = a
-			i = i + 1
-			continue
-		}
-		break
-	}
-	return addrs
-}
-
-// Commit the current transaction.
-func (l Log) Commit() {
-	l.lock()
-	length := *l.length
-	aBlock := l.encodeAddrs()
-	// TODO: maybe safe to unlock early?
-	l.unlock()
-	disk.Write(1, aBlock)
-	header := intToBlock(length)
-	disk.Write(0, header)
-}
-
-func getLogEntry(addrs []uint64, logOffset uint64) (uint64, disk.Block) {
-	diskAddr := 1 + 1 + logOffset
-	a := addrs[logOffset]
-	v := disk.Read(diskAddr + 1)
+// getEntry returns the ith entry in the logical log
+//
+// requires i < l.hdr.length
+func (l *Log) getEntry(i uint64) (uint64, disk.Block) {
+	a := l.hdr.addrs[i]
+	v := l.logData[(l.hdr.start+i)%logLength]
 	return a, v
 }
 
-// applyLog assumes we are running sequentially
-func applyLog(addrs []uint64) {
-	length := uint64(len(addrs))
-	for i := uint64(0); ; {
-		if i < length {
-			a, v := getLogEntry(addrs, i)
-			disk.Write(logLength+a, v)
-			i = i + 1
-			continue
-		}
-		break
-	}
-}
-func clearLog() {
-	header := intToBlock(0)
-	disk.Write(0, header)
+func (l *Log) appendEntry(a uint64, v disk.Block) {
+	i := l.hdr.length
+	l.hdr.addrs[i] = a
+	l.hdr.length++
+	physicalLogOffset := (l.hdr.start + i) % logLength
+	l.logData[physicalLogOffset] = v
+	disk.Write(1+physicalLogOffset, v)
 }
 
-// Apply all the committed transactions.
-//
-// Frees all the space in the log.
-func (l Log) Apply() {
-	l.lock()
-	addrs := *l.addrs
-	applyLog(addrs)
-	newAddrs := make([]uint64, 0)
-	*l.addrs = newAddrs
-	cache := l.cache
-	for k := range cache {
-		delete(cache, k)
+// Apply clears the log to make room for more operations
+func (l *Log) Apply() {
+	l.applyLock.Lock()
+	l.l.Lock()
+	hdr := l.hdr
+	l.hdr.start = (hdr.start + hdr.length) % logLength
+	l.hdr.length = 0
+	l.applyLength = hdr.length
+	l.l.Unlock()
+
+	for i := uint64(0); i < hdr.length; i++ {
+		// NOTE: this is really tricky; we somehow know the old addresses
+		//  aren't being modified (the slice pointers themselves are never
+		//  modified)
+		a := hdr.addrs[i]
+		v := l.logData[(hdr.start+i)%logLength]
+		disk.Write(dataStart+a, v)
 	}
-	clearLog()
-	*l.length = 0
-	l.unlock()
+	// ordering-only barrier, so data is on disk before header
+	disk.Barrier()
+
+	l.l.Lock()
+	// NOTE: this is also tricky; the header is now a mix of the updates from
+	//  the beginning of the Apply as well as concurrent commits
+	disk.Write(0, encodeHdr(l.hdr))
+	l.applyLength = 0
+	l.l.Unlock()
+	disk.Barrier()
+	l.applyLock.Unlock()
+}
+
+// addPending adds op to the list of pending operations eligible for group
+// commit, and returns the operation's sequence number
+//
+// assumes l.l.Lock
+func (l *Log) addPending(op Op) uint {
+	l.pending = append(l.pending, op)
+	return l.seqNum + uint(len(l.pending))
+}
+
+func (l *Log) flushOps(ops []Op) {
+	for _, op := range ops {
+		for i := range op.addrs {
+			a := op.addrs[i]
+			v := op.blocks[i]
+			l.appendEntry(a, v)
+		}
+	}
+	disk.Barrier()
+	disk.Write(0, encodeHdr(l.hdr))
+}
+
+// flushTxn returns false if it made no progress
+func (l *Log) flushTxn() bool {
+	n := splitTxns(l.pending, int(logLength-l.hdr.length-l.applyLength))
+	if n == 0 {
+		return false
+	}
+	l.flushOps(l.pending[:n])
+	l.seqNum += uint(n)
+	return true
+}
+
+func (l *Log) Commit(op Op) {
+	// assumes op is valid
+	ok := op.Valid()
+	if !ok {
+		panic("operation overflows log")
+	}
+	if op.length() == 0 {
+		// operation can be logically committed without doing anything
+		return
+	}
+	l.l.Lock()
+	seqNum := l.addPending(op)
+	// invariant: l.l.Lock
+	for {
+		l.l.Unlock()
+		// maybe get some more transactions to group in
+		l.l.Lock()
+		ok := l.flushTxn()
+		if !ok {
+			// TODO: we release/reacquire the lock for no good reason
+			l.l.Unlock()
+			l.Apply()
+		}
+		if l.seqNum >= seqNum {
+			break
+		}
+	}
+	l.l.Unlock()
 }
 
 // Open recovers the log following a crash or shutdown
-func Open() Log {
-	header := disk.Read(0)
-	length := blockToInt(header)
-	addrs := decodeAddrs(length)
-	addrPtr := new([]uint64)
-	*addrPtr = addrs
-	applyLog(addrs)
-	clearLog()
-
-	cache := make(map[uint64]disk.Block)
-	lengthPtr := new(uint64)
-	*lengthPtr = 0
-	l := new(sync.RWMutex)
-	return Log{l: l, addrs: addrPtr, cache: cache, length: lengthPtr}
+func Open() *Log {
+	hdr := decodeHdr(disk.Read(0))
+	logData := make([]disk.Block, logLength)
+	for i := uint64(0); i < logLength; i++ {
+		logData[i] = disk.Read(1 + i)
+	}
+	return &Log{hdr: hdr, logData: logData}
 }
