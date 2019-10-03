@@ -1,6 +1,8 @@
 package awol
 
 import (
+	"fmt"
+	"runtime"
 	"sync"
 
 	"github.com/tchajed/goose/machine"
@@ -11,6 +13,8 @@ import (
 const logLength = (disk.BlockSize - 8 - 8) / 8 // = 510
 
 const dataStart = 1 + logLength
+
+const DEBUG = false
 
 type Op struct {
 	Addrs  []uint64
@@ -83,8 +87,8 @@ func New() *Log {
 	return &Log{hdr: hdr, logData: logData}
 }
 
-func (l Log) Begin() *Op {
-	return &Op{}
+func (l Log) Begin() Op {
+	return Op{}
 }
 
 func (l Log) logRead(a0 uint64) (disk.Block, bool) {
@@ -114,26 +118,23 @@ func (l Log) Size() int {
 	return int(disk.Size() - dataStart)
 }
 
-func (l Log) BeginOp() Op {
-	return Op{}
-}
-
 // Write to an in-progress transaction
 func (op *Op) Write(a uint64, v disk.Block) {
 	op.Addrs = append(op.Addrs, a)
 	op.Blocks = append(op.Blocks, v)
 }
 
-func (op *Op) length() int {
+func (op Op) length() int {
 	return len(op.Addrs)
 }
 
-func (op *Op) Valid() bool {
+func (op Op) Valid() bool {
 	return uint64(op.length()) < logLength
 }
 
 // Apply clears the log to make room for more operations
 func (l *Log) Apply() {
+	l.debug()
 	l.l.Lock()
 	l.hdrL.Lock()
 	hdr := l.hdr
@@ -152,6 +153,7 @@ func (l *Log) Apply() {
 	}
 	// ordering-only barrier, so data is on disk before header
 	disk.Barrier()
+	l.debug()
 
 	l.l.Lock()
 	disk.Write(0, encodeHdr(l.hdr))
@@ -191,6 +193,7 @@ func (l *Log) appendEntry(a uint64, v disk.Block) {
 }
 
 func (l *Log) flushOps(ops []Op) {
+	l.debug()
 	for _, op := range ops {
 		for i := range op.Addrs {
 			a := op.Addrs[i]
@@ -219,8 +222,22 @@ func splitTxns(ops []Op, maxLen int) int {
 	return len(ops)
 }
 
+func (l *Log) debug() {
+	if DEBUG {
+		pc, _, _, ok := runtime.Caller(1)
+		if ok {
+			details := runtime.FuncForPC(pc)
+			fmt.Printf("%s\n  length: %d pending: %d\n",
+				details.Name(), l.hdr.length, len(l.pending))
+		} else {
+			panic("no caller?")
+		}
+	}
+}
+
 // flushTxn returns false if it made no progress
 func (l *Log) flushTxn() bool {
+	l.debug()
 	n := splitTxns(l.pending, int(logLength-l.hdr.length-l.applyLength))
 	if n == 0 {
 		return false
@@ -240,6 +257,7 @@ func (l *Log) Commit(op Op) {
 		// operation can be logically committed without doing anything
 		return
 	}
+	l.debug()
 	l.l.Lock()
 	seqNum := l.addPending(op)
 	// invariant: l.l.Lock
@@ -251,6 +269,7 @@ func (l *Log) Commit(op Op) {
 		if !ok {
 			l.l.Unlock()
 			l.Apply()
+			l.l.Lock()
 		}
 		if l.seqNum >= seqNum {
 			break
