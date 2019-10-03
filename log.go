@@ -173,15 +173,6 @@ func (l *Log) addPending(op Op) uint {
 	return l.seqNum + uint(len(l.pending))
 }
 
-// getEntry returns the ith entry in the logical log
-//
-// requires i < l.hdr.length
-func (l *Log) getEntry(i uint64) (uint64, disk.Block) {
-	a := l.hdr.addrs[i]
-	v := l.logData[(l.hdr.start+i)%logLength]
-	return a, v
-}
-
 func (l *Log) appendEntry(a uint64, v disk.Block) {
 	i := l.hdr.length
 	// TODO: absorption

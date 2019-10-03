@@ -148,6 +148,16 @@ func (suite *LogSuite) TestFillLog() {
 	suite.CheckAll()
 }
 
+func (suite *LogSuite) TestEmptyCommit() {
+	suite.Commit([]Write{})
+	suite.Commit([]Write{
+		{2, block(1)},
+		{3, block(2)},
+	})
+	suite.Commit([]Write{})
+	suite.CheckAll()
+}
+
 func (suite *LogSuite) TestRepeatedWrites() {
 	for opNum := 0; opNum < 100; opNum++ {
 		suite.Commit([]Write{
