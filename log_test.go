@@ -167,6 +167,38 @@ func (suite *LogSuite) TestRepeatedWrites() {
 	suite.CheckAll()
 }
 
+func (suite *LogSuite) TestOpenAfterCommit() {
+	suite.Commit([]Write{
+		{2, block(2)},
+		{3, block(3)},
+		{4, block(4)},
+	})
+	// crash should have no visible effect, so don't do anything to memLog
+	suite.l = awol.Open()
+	suite.CheckAll()
+}
+
+func (suite *LogSuite) TestOpenAfterApply() {
+	suite.Commit([]Write{
+		{2, block(2)},
+		{3, block(3)},
+		{4, block(4)},
+	})
+	suite.Apply()
+	suite.l = awol.Open()
+	suite.CheckAll()
+}
+
+func (suite *LogSuite) TestOpenAfterLogOverflow() {
+	for a := uint64(0); a < 1000; a++ {
+		suite.Commit([]Write{
+			{a, block(2)},
+		})
+	}
+	suite.l = awol.Open()
+	suite.CheckAll()
+}
+
 func BenchmarkLogCommit(b *testing.B) {
 	disk.Init(disk.NewMemDisk(10000))
 	l := awol.New()
