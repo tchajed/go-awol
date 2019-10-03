@@ -1,6 +1,7 @@
 package awol_test
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/suite"
@@ -29,7 +30,7 @@ func TestLogSuite(t *testing.T) {
 }
 
 func (suite *LogSuite) SetupTest() {
-	disk.Init(disk.NewMemDisk(1000))
+	disk.Init(disk.NewMemDisk(10000))
 	suite.memLog = NewMem()
 	suite.l = awol.New()
 	if suite.memLog.Size() != suite.l.Size() {
@@ -45,16 +46,28 @@ func (suite *LogSuite) Read(a uint64) (expected disk.Block, v disk.Block) {
 
 func (suite *LogSuite) Check(a uint64, msgAndArgs ...interface{}) {
 	expect, v := suite.Read(a)
+	if !reflect.DeepEqual(expect, v) {
+		for i := uint64(1); i < disk.BlockSize; i++ {
+			if expect[i] != 0 || v[i] != 0 {
+				break
+			}
+		}
+		// blocks are of the form [i, 0...]
+		suite.Fail("blocks differ",
+			"d[%d] disk.Block{%d, 0...} != disk.Block{%d, 0...}",
+			a, expect[0], v[0])
+		return
+	}
 	suite.Equal(expect, v, msgAndArgs...)
 }
 
 func (suite *LogSuite) CheckAll(msgAndArgs ...interface{}) {
 	as := suite.memLog.Writes()
-	suite.Check(0)
+	suite.Check(0, "addr: %d", 0)
 	for _, a := range as {
-		suite.Check(a)
+		suite.Check(a, "addr: %d", a)
 	}
-	suite.Check(uint64(suite.memLog.Size()) - 1)
+	suite.Check(uint64(suite.memLog.Size())-1, "addr: (last)")
 	if suite.T().Failed() {
 		suite.FailNow("check failed", msgAndArgs...)
 	}
@@ -120,6 +133,27 @@ func (suite *LogSuite) TestApplyEarly() {
 		{3, block(2)},
 	})
 	suite.Apply()
+	suite.CheckAll()
+}
+
+func (suite *LogSuite) TestFillLog() {
+	for opNum := 0; opNum < 60; opNum++ {
+		var writes []Write
+		for i := 0; i < 10; i++ {
+			a := uint64(opNum*10 + i)
+			writes = append(writes, Write{a, block(int(a % 256))})
+		}
+		suite.Commit(writes)
+	}
+	suite.CheckAll()
+}
+
+func (suite *LogSuite) TestRepeatedWrites() {
+	for opNum := 0; opNum < 100; opNum++ {
+		suite.Commit([]Write{
+			{2, block(opNum % 256)},
+		})
+	}
 	suite.CheckAll()
 }
 

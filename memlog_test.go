@@ -1,6 +1,8 @@
 package awol_test
 
 import (
+	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/tchajed/go-awol"
@@ -19,8 +21,7 @@ func NewMem() MemLog {
 	size := disk.Size() - (1 + 510)
 	d := make([]disk.Block, size)
 	for i := range d {
-		block := make(disk.Block, disk.BlockSize)
-		d[i] = block
+		d[i] = make(disk.Block, disk.BlockSize)
 	}
 	return MemLog{
 		l:      new(sync.RWMutex),
@@ -51,6 +52,9 @@ func (l MemLog) Commit(op awol.Op) {
 	for i := range op.Addrs {
 		a := op.Addrs[i]
 		v := op.Blocks[i]
+		if a >= uint64(len(l.d)) {
+			panic(fmt.Sprintf("write %d out-of-range (%d blocks)", a, len(l.d)))
+		}
 		l.d[a] = v
 		l.writes[a] = true
 	}
@@ -64,5 +68,8 @@ func (l MemLog) Writes() []uint64 {
 	for a, _ := range l.writes {
 		addrs = append(addrs, a)
 	}
+	sort.Slice(addrs, func(i, j int) bool {
+		return addrs[i] < addrs[j]
+	})
 	return addrs
 }

@@ -92,7 +92,7 @@ func (l Log) Begin() Op {
 }
 
 func (l Log) logRead(a0 uint64) (disk.Block, bool) {
-	for i := 0; i < int(l.hdr.length); i++ {
+	for i := int(l.hdr.length) - 1; i >= 0; i-- {
 		if l.hdr.addrs[i] == a0 {
 			return l.logData[int(l.hdr.start)+i], true
 		}
@@ -204,6 +204,7 @@ func (l *Log) flushOps(ops []Op) {
 	disk.Barrier()
 	l.hdrL.Lock()
 	disk.Write(0, encodeHdr(l.hdr))
+	l.seqNum += uint(len(ops))
 	l.hdrL.Unlock()
 }
 
@@ -243,7 +244,7 @@ func (l *Log) flushTxn() bool {
 		return false
 	}
 	l.flushOps(l.pending[:n])
-	l.seqNum += uint(n)
+	l.pending = l.pending[n:]
 	return true
 }
 
