@@ -13,8 +13,8 @@ const logLength = (disk.BlockSize - 8 - 8) / 8 // = 510
 const dataStart = 1 + logLength
 
 type Op struct {
-	addrs  []uint64
-	blocks []disk.Block
+	Addrs  []uint64
+	Blocks []disk.Block
 }
 
 type Hdr struct {
@@ -120,13 +120,12 @@ func (l Log) BeginOp() Op {
 
 // Write to an in-progress transaction
 func (op *Op) Write(a uint64, v disk.Block) {
-	// TODO: absorption
-	op.addrs = append(op.addrs, a)
-	op.blocks = append(op.blocks, v)
+	op.Addrs = append(op.Addrs, a)
+	op.Blocks = append(op.Blocks, v)
 }
 
 func (op *Op) length() int {
-	return len(op.addrs)
+	return len(op.Addrs)
 }
 
 func (op *Op) Valid() bool {
@@ -183,6 +182,7 @@ func (l *Log) getEntry(i uint64) (uint64, disk.Block) {
 
 func (l *Log) appendEntry(a uint64, v disk.Block) {
 	i := l.hdr.length
+	// TODO: absorption
 	l.hdr.addrs[i] = a
 	l.hdr.length++
 	physicalLogOffset := (l.hdr.start + i) % logLength
@@ -192,9 +192,9 @@ func (l *Log) appendEntry(a uint64, v disk.Block) {
 
 func (l *Log) flushOps(ops []Op) {
 	for _, op := range ops {
-		for i := range op.addrs {
-			a := op.addrs[i]
-			v := op.blocks[i]
+		for i := range op.Addrs {
+			a := op.Addrs[i]
+			v := op.Blocks[i]
 			l.appendEntry(a, v)
 		}
 	}
