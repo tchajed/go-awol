@@ -33,7 +33,7 @@ type Log struct {
 	applyLength uint64
 	logData     []disk.Block
 
-	applyLock sync.RWMutex
+	hdrL sync.RWMutex
 }
 
 func encodeHdr(hdr Hdr) disk.Block {
@@ -133,19 +133,43 @@ func (op *Op) Valid() bool {
 	return uint64(op.length()) < logLength
 }
 
-// splitTxns finds a number of ops n such that ops[:n] have at most
-// maxLen blocks
-func splitTxns(ops []Op, maxLen int) int {
-	length := 0
-	for i, op := range ops {
-		opLen := op.length()
-		if length+opLen > maxLen {
-			return i
-		}
-		length += opLen
+// Apply clears the log to make room for more operations
+func (l *Log) Apply() {
+	l.l.Lock()
+	l.hdrL.Lock()
+	hdr := l.hdr
+	l.hdr.start = (hdr.start + hdr.length) % logLength
+	l.hdr.length = 0
+	l.applyLength = hdr.length
+	l.l.Unlock()
+
+	for i := uint64(0); i < hdr.length; i++ {
+		// NOTE: this is really tricky; we somehow know the old addresses
+		//  aren't being modified (the slice pointers themselves are never
+		//  modified)
+		a := hdr.addrs[i]
+		v := l.logData[(hdr.start+i)%logLength]
+		disk.Write(dataStart+a, v)
 	}
-	// all of the transactions fit
-	return len(ops)
+	// ordering-only barrier, so data is on disk before header
+	disk.Barrier()
+
+	l.l.Lock()
+	disk.Write(0, encodeHdr(l.hdr))
+	l.applyLength = 0
+	l.l.Unlock()
+	disk.Barrier()
+	l.hdrL.Unlock()
+}
+
+// addPending adds op to the list of pending operations eligible for group
+// commit, and returns the operation's sequence number
+// getEntry returns the ith entry in the logical log
+//
+// assumes l.l.Lock
+func (l *Log) addPending(op Op) uint {
+	l.pending = append(l.pending, op)
+	return l.seqNum + uint(len(l.pending))
 }
 
 // getEntry returns the ith entry in the logical log
@@ -166,46 +190,6 @@ func (l *Log) appendEntry(a uint64, v disk.Block) {
 	disk.Write(1+physicalLogOffset, v)
 }
 
-// Apply clears the log to make room for more operations
-func (l *Log) Apply() {
-	l.applyLock.Lock()
-	l.l.Lock()
-	hdr := l.hdr
-	l.hdr.start = (hdr.start + hdr.length) % logLength
-	l.hdr.length = 0
-	l.applyLength = hdr.length
-	l.l.Unlock()
-
-	for i := uint64(0); i < hdr.length; i++ {
-		// NOTE: this is really tricky; we somehow know the old addresses
-		//  aren't being modified (the slice pointers themselves are never
-		//  modified)
-		a := hdr.addrs[i]
-		v := l.logData[(hdr.start+i)%logLength]
-		disk.Write(dataStart+a, v)
-	}
-	// ordering-only barrier, so data is on disk before header
-	disk.Barrier()
-
-	l.l.Lock()
-	// NOTE: this is also tricky; the header is now a mix of the updates from
-	//  the beginning of the Apply as well as concurrent commits
-	disk.Write(0, encodeHdr(l.hdr))
-	l.applyLength = 0
-	l.l.Unlock()
-	disk.Barrier()
-	l.applyLock.Unlock()
-}
-
-// addPending adds op to the list of pending operations eligible for group
-// commit, and returns the operation's sequence number
-//
-// assumes l.l.Lock
-func (l *Log) addPending(op Op) uint {
-	l.pending = append(l.pending, op)
-	return l.seqNum + uint(len(l.pending))
-}
-
 func (l *Log) flushOps(ops []Op) {
 	for _, op := range ops {
 		for i := range op.addrs {
@@ -215,7 +199,24 @@ func (l *Log) flushOps(ops []Op) {
 		}
 	}
 	disk.Barrier()
+	l.hdrL.Lock()
 	disk.Write(0, encodeHdr(l.hdr))
+	l.hdrL.Unlock()
+}
+
+// splitTxns finds a number of ops n such that ops[:n] have at most
+// maxLen blocks
+func splitTxns(ops []Op, maxLen int) int {
+	length := 0
+	for i, op := range ops {
+		opLen := op.length()
+		if length+opLen > maxLen {
+			return i
+		}
+		length += opLen
+	}
+	// all of the transactions fit
+	return len(ops)
 }
 
 // flushTxn returns false if it made no progress
@@ -248,7 +249,6 @@ func (l *Log) Commit(op Op) {
 		l.l.Lock()
 		ok := l.flushTxn()
 		if !ok {
-			// TODO: we release/reacquire the lock for no good reason
 			l.l.Unlock()
 			l.Apply()
 		}
