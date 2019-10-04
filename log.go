@@ -1,8 +1,6 @@
 package awol
 
 import (
-	"fmt"
-	"runtime"
 	"sync"
 
 	"github.com/tchajed/goose/machine"
@@ -42,6 +40,9 @@ type Log struct {
 	//
 	// the lock acquisition order is l then hdrL
 	hdrL sync.RWMutex
+
+	// protects the unused space after the log
+	commitL sync.RWMutex
 }
 
 func encodeHdr(hdr Hdr) disk.Block {
@@ -145,7 +146,6 @@ func (l *Log) Apply() {
 //
 // assumes l.l.Lock
 func (l *Log) apply() {
-	l.debug()
 	l.hdrL.Lock()
 	hdr := l.hdr
 	l.hdr.start = (hdr.start + hdr.length) % logLength
@@ -163,7 +163,6 @@ func (l *Log) apply() {
 	}
 	// ordering-only barrier, so data is on disk before header
 	disk.Barrier()
-	l.debug()
 
 	l.l.Lock()
 	disk.Write(0, encodeHdr(l.hdr))
@@ -186,43 +185,33 @@ func (l *Log) addPending(op Op) uint {
 //
 // assumes there is space for the new entry
 //
-// assumes l.l.Lock
-func (l *Log) appendEntry(a uint64, v disk.Block) {
-	i := l.hdr.length
+// assumes l.commitL.Lock
+func (l *Log) appendEntry(hdr *Hdr, a uint64, v disk.Block) {
+	i := hdr.length
 	// TODO: absorption
-	l.hdr.addrs[i] = a
-	l.hdr.length++
+	hdr.addrs[i] = a
+	hdr.length++
 	physicalLogOffset := (l.hdr.start + i) % logLength
 	l.logData[physicalLogOffset] = v
 	disk.Write(1+physicalLogOffset, v)
 }
 
-// flushOps flushes a whole group commit transaction, including writing the
-// header (which is the crash linearizability point, but not yet visible to
-// other threads due to holding the lock)
+// flushOps flushes a whole group commit transaction
 //
-// assumes l.l.Lock
-func (l *Log) flushOps(ops []Op) {
-	l.debug()
+// returns a new header that would commit this transaction
+//
+// assumes l.l.RLock
+func (l *Log) flushOps(ops []Op) Hdr {
+	hdr := l.hdr
 	for _, op := range ops {
 		for i := range op.Addrs {
 			a := op.Addrs[i]
 			v := op.Blocks[i]
-			l.appendEntry(a, v)
+			l.appendEntry(&hdr, a, v)
 		}
 	}
 	disk.Barrier()
-	l.hdrL.Lock()
-	disk.Write(0, encodeHdr(l.hdr))
-	// NOTE: this barrier is not necessary for correctness but simplifies the
-	//   helping argument.
-	//
-	// when the header write is persistent, then ops have logically committed
-	// following a crash and we should store recovery helping assertions for all
-	// of them.
-	disk.Barrier()
-	l.seqNum += uint(len(ops))
-	l.hdrL.Unlock()
+	return hdr
 }
 
 // splitTxns finds a number of ops n such that ops[:n] have at most
@@ -240,37 +229,42 @@ func splitTxns(ops []Op, maxLen int) int {
 	return len(ops)
 }
 
-func (l *Log) debug() {
-	if DEBUG {
-		pc, _, _, ok := runtime.Caller(1)
-		if ok {
-			details := runtime.FuncForPC(pc)
-			fmt.Printf("%s\n  length: %d pending: %d\n",
-				details.Name(), l.hdr.length, len(l.pending))
-		} else {
-			panic("no caller?")
-		}
-	}
-}
-
-// flushTxn returns false if it made no progress
+// flushTxn returns the latest sequence number flushed
 //
-// assumes l.l.Lock
-func (l *Log) flushTxn() bool {
-	l.debug()
+// assumes l.l.RLock, releases it
+func (l *Log) flushTxn() uint {
 	n := splitTxns(l.pending, int(logLength-l.hdr.length-l.applyLength))
 	if n == 0 {
-		return false
+		l.l.RUnlock()
+		return l.seqNum
 	}
-	// TODO: we hold a write lock for this entire transaction
+	hdr := l.flushOps(l.pending[:n])
+	// TODO: the locks don't make any sense
 	//
-	// (including writing the blocks to disk),
-	// which isn't great - it would be nice if most of the flush happened
-	// with a read lock over the log struct and only the final commit
-	// happened with a write lock that blocks readers
-	l.flushOps(l.pending[:n])
+	// I think the intuition for the commitL is moving in the right direction,
+	// though: it protects the on-disk log after the valid region, and the
+	// "hdrL" protects the on-disk log before (for Apply); we probably protect
+	// the on-disk header block using a write lock on l.l.
+	l.hdrL.Lock()
+	l.commitL.Lock()
+	l.l.RUnlock()
+	disk.Write(0, encodeHdr(hdr))
+	// NOTE: this barrier is not necessary for correctness but simplifies the
+	//   helping argument.
+	//
+	// when the header write is persistent, then ops have logically committed
+	// following a crash and we should store recovery helping assertions for all
+	// of them.
+	disk.Barrier()
+	l.hdr = hdr
+	l.commitL.Unlock()
+	l.hdrL.Unlock()
+	l.l.Lock()
+	l.seqNum += uint(n)
+	newSeqNum := l.seqNum
 	l.pending = l.pending[n:]
-	return true
+	l.l.Unlock()
+	return newSeqNum
 }
 
 func (l *Log) Commit(op Op) {
@@ -283,26 +277,27 @@ func (l *Log) Commit(op Op) {
 		// operation can be logically committed without doing anything
 		return
 	}
-	l.debug()
 	l.l.Lock()
+	oldSeq := l.seqNum
 	seqNum := l.addPending(op)
-	// invariant: l.l.Lock
+	l.l.Unlock()
 	for {
-		l.l.Unlock()
 		// maybe get some more transactions to group in
-		l.l.Lock()
-		ok := l.flushTxn()
-		if !ok {
+		l.l.RLock()
+		newSeq := l.flushTxn()
+		if newSeq >= seqNum {
+			break
+		}
+		// it doesn't matter for correctness how this is decided
+		if newSeq == oldSeq {
 			// if we didn't make progress, we flush the transaction to make
 			// progress (the only other reason we don't have space is an
 			// in-progress apply, and this solves that problem, too)
+			l.l.Lock()
 			l.apply()
-		}
-		if l.seqNum >= seqNum {
-			break
+			l.l.Unlock()
 		}
 	}
-	l.l.Unlock()
 }
 
 // Open recovers the log following a crash or shutdown
