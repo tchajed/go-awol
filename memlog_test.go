@@ -63,6 +63,12 @@ func (l MemLog) Commit(op awol.Op) {
 func (l MemLog) Apply() {
 }
 
+// Crash simulates the effect of a crash
+//
+// since the log is completely synchronous this is a no-op; it only serves as
+// documentation to signal intent in tests.
+func (l *MemLog) Crash() {}
+
 func (l MemLog) Writes() []uint64 {
 	addrs := make([]uint64, 0, len(l.writes))
 	for a, _ := range l.writes {

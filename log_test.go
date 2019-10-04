@@ -73,6 +73,11 @@ func (suite *LogSuite) CheckAll(msgAndArgs ...interface{}) {
 	}
 }
 
+func (suite *LogSuite) Crash() {
+	suite.l = awol.Open()
+	suite.memLog.Crash()
+}
+
 type Write struct {
 	A uint64
 	V disk.Block
@@ -173,8 +178,7 @@ func (suite *LogSuite) TestOpenAfterCommit() {
 		{3, block(3)},
 		{4, block(4)},
 	})
-	// crash should have no visible effect, so don't do anything to memLog
-	suite.l = awol.Open()
+	suite.Crash()
 	suite.CheckAll()
 }
 
@@ -185,7 +189,7 @@ func (suite *LogSuite) TestOpenAfterApply() {
 		{4, block(4)},
 	})
 	suite.Apply()
-	suite.l = awol.Open()
+	suite.Crash()
 	suite.CheckAll()
 }
 
@@ -195,7 +199,7 @@ func (suite *LogSuite) TestOpenAfterLogOverflow() {
 			{a, block(2)},
 		})
 	}
-	suite.l = awol.Open()
+	suite.Crash()
 	suite.CheckAll()
 }
 
