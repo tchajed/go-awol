@@ -37,6 +37,10 @@ type Log struct {
 	applyLength uint64
 	logData     []disk.Block
 
+	// protects changes to the on-disk log structure (at least writes to the
+	// header, and also the reserved space for a concurrent apply)
+	//
+	// the lock acquisition order is l then hdrL
 	hdrL sync.RWMutex
 }
 
@@ -178,6 +182,11 @@ func (l *Log) addPending(op Op) uint {
 	return l.seqNum + uint(len(l.pending))
 }
 
+// appendEntry flushes (a, v) to the end of the log
+//
+// assumes there is space for the new entry
+//
+// assumes l.l.Lock
 func (l *Log) appendEntry(a uint64, v disk.Block) {
 	i := l.hdr.length
 	// TODO: absorption
@@ -188,6 +197,11 @@ func (l *Log) appendEntry(a uint64, v disk.Block) {
 	disk.Write(1+physicalLogOffset, v)
 }
 
+// flushOps flushes a whole group commit transaction, including writing the
+// header (which is the crash linearizability point, but not yet visible to
+// other threads due to holding the lock)
+//
+// assumes l.l.Lock
 func (l *Log) flushOps(ops []Op) {
 	l.debug()
 	for _, op := range ops {
@@ -200,6 +214,13 @@ func (l *Log) flushOps(ops []Op) {
 	disk.Barrier()
 	l.hdrL.Lock()
 	disk.Write(0, encodeHdr(l.hdr))
+	// NOTE: this barrier is not necessary for correctness but simplifies the
+	//   helping argument.
+	//
+	// when the header write is persistent, then ops have logically committed
+	// following a crash and we should store recovery helping assertions for all
+	// of them.
+	disk.Barrier()
 	l.seqNum += uint(len(ops))
 	l.hdrL.Unlock()
 }
@@ -233,12 +254,20 @@ func (l *Log) debug() {
 }
 
 // flushTxn returns false if it made no progress
+//
+// assumes l.l.Lock
 func (l *Log) flushTxn() bool {
 	l.debug()
 	n := splitTxns(l.pending, int(logLength-l.hdr.length-l.applyLength))
 	if n == 0 {
 		return false
 	}
+	// TODO: we hold a write lock for this entire transaction
+	//
+	// (including writing the blocks to disk),
+	// which isn't great - it would be nice if most of the flush happened
+	// with a read lock over the log struct and only the final commit
+	// happened with a write lock that blocks readers
 	l.flushOps(l.pending[:n])
 	l.pending = l.pending[n:]
 	return true
