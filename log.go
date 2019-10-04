@@ -67,8 +67,6 @@ func decodeHdr(b disk.Block) Hdr {
 	return Hdr{start: start, length: count, addrs: addrs}
 }
 
-// forall hdr:: blockToHdr(hdrToBlock(hdr)) == hdr
-
 // New initializes a fresh log
 func New() *Log {
 	if disk.Size() <= dataStart {
@@ -79,7 +77,7 @@ func New() *Log {
 	block0 := make(disk.Block, 4096)
 	for i := uint64(0); i < logLength; i++ {
 		logData[i] = block0
-		disk.Write(0, block0)
+		disk.Write(1+i, block0)
 	}
 	hdr := Hdr{start: 0, length: 0, addrs: addrs}
 	disk.Write(0, encodeHdr(hdr))
@@ -134,8 +132,16 @@ func (op Op) Valid() bool {
 
 // Apply clears the log to make room for more operations
 func (l *Log) Apply() {
-	l.debug()
 	l.l.Lock()
+	defer l.l.Unlock()
+	l.apply()
+}
+
+// apply is the body of apply
+//
+// assumes l.l.Lock
+func (l *Log) apply() {
+	l.debug()
 	l.hdrL.Lock()
 	hdr := l.hdr
 	l.hdr.start = (hdr.start + hdr.length) % logLength
@@ -158,7 +164,6 @@ func (l *Log) Apply() {
 	l.l.Lock()
 	disk.Write(0, encodeHdr(l.hdr))
 	l.applyLength = 0
-	l.l.Unlock()
 	disk.Barrier()
 	l.hdrL.Unlock()
 }
@@ -259,9 +264,10 @@ func (l *Log) Commit(op Op) {
 		l.l.Lock()
 		ok := l.flushTxn()
 		if !ok {
-			l.l.Unlock()
-			l.Apply()
-			l.l.Lock()
+			// if we didn't make progress, we flush the transaction to make
+			// progress (the only other reason we don't have space is an
+			// in-progress apply, and this solves that problem, too)
+			l.apply()
 		}
 		if l.seqNum >= seqNum {
 			break
