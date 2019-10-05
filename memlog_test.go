@@ -42,11 +42,11 @@ func (l MemLog) Size() int {
 	return len(l.d)
 }
 
-func (l MemLog) Begin() awol.Op {
-	return awol.Op{}
+func (l MemLog) Begin() *awol.Op {
+	return &awol.Op{}
 }
 
-func (l MemLog) Commit(op awol.Op) {
+func (l MemLog) Commit(op *awol.Op) {
 	l.l.Lock()
 	defer l.l.Unlock()
 	for i := range op.Addrs {

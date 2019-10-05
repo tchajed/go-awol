@@ -90,8 +90,8 @@ func New() *Log {
 	return &Log{hdr: hdr, logData: logData}
 }
 
-func (l Log) Begin() Op {
-	return Op{}
+func (l Log) Begin() *Op {
+	return &Op{}
 }
 
 func (l Log) logRead(a0 uint64) (disk.Block, bool) {
@@ -176,8 +176,8 @@ func (l *Log) apply() {
 // getEntry returns the ith entry in the logical log
 //
 // assumes l.l.Lock
-func (l *Log) addPending(op Op) uint {
-	l.pending = append(l.pending, op)
+func (l *Log) addPending(op *Op) uint {
+	l.pending = append(l.pending, *op)
 	return l.seqNum + uint(len(l.pending))
 }
 
@@ -267,7 +267,7 @@ func (l *Log) flushTxn() uint {
 	return newSeqNum
 }
 
-func (l *Log) Commit(op Op) {
+func (l *Log) Commit(op *Op) {
 	// assumes op is valid
 	ok := op.Valid()
 	if !ok {

@@ -12,8 +12,8 @@ import (
 type Log interface {
 	Read(a uint64) disk.Block
 	Size() int
-	Begin() awol.Op
-	Commit(op awol.Op)
+	Begin() *awol.Op
+	Commit(op *awol.Op)
 	Apply()
 }
 
