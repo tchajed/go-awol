@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 	"github.com/tchajed/go-awol"
+	"github.com/tchajed/go-awol/mem"
 	"github.com/tchajed/goose/machine/disk"
 )
 
@@ -22,7 +23,7 @@ var _ Log = &awol.Log{}
 type LogSuite struct {
 	suite.Suite
 	l      *awol.Log
-	memLog MemLog
+	memLog mem.Log
 }
 
 func TestLogSuite(t *testing.T) {
@@ -31,8 +32,8 @@ func TestLogSuite(t *testing.T) {
 
 func (suite *LogSuite) SetupTest() {
 	disk.Init(disk.NewMemDisk(10000))
-	suite.memLog = NewMem()
 	suite.l = awol.New()
+	suite.memLog = mem.New(suite.l.Size())
 	if suite.memLog.Size() != suite.l.Size() {
 		suite.FailNow("mem log size is not set up correctly")
 	}
