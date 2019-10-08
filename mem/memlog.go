@@ -1,7 +1,6 @@
 package mem
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"sort"
@@ -12,13 +11,7 @@ import (
 	"github.com/tchajed/goose/machine/disk"
 )
 
-var debug bool
-
-func init() {
-	flag.BoolVar(&debug, "memlog-debug",
-		false,
-		"print all log writes to stderr")
-}
+var Debug bool
 
 type Log struct {
 	l      *sync.RWMutex
@@ -41,6 +34,9 @@ func New(size int) Log {
 func (l Log) Read(a uint64) disk.Block {
 	l.l.Lock()
 	defer l.l.Unlock()
+	if Debug {
+		fmt.Fprintf(os.Stderr, "log: read d[%d]\n", a)
+	}
 	return l.d[a]
 }
 
@@ -74,7 +70,7 @@ func showBlock(b disk.Block) string {
 func (l Log) Commit(op *awol.Op) {
 	l.l.Lock()
 	defer l.l.Unlock()
-	if debug {
+	if Debug {
 		fmt.Fprintf(os.Stderr, "log: txn %p\n", op)
 	}
 	for i := range op.Addrs {
@@ -84,7 +80,7 @@ func (l Log) Commit(op *awol.Op) {
 			panic(fmt.Sprintf("write %d out-of-range (%d blocks)", a, len(l.d)))
 		}
 		l.d[a] = v
-		if debug {
+		if Debug {
 			fmt.Fprintf(os.Stderr, "  d[%d] := %s\n", a, showBlock(v))
 		}
 		l.writes[a] = true
