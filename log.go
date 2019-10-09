@@ -1,5 +1,58 @@
 package awol
 
+/*
+awol implements a concurrent write-ahead log
+
+The abstract state of the log is a logical disk the size of the data region. The
+log supports three main operations: Read, Commit, and Apply. Read reads from the
+logical disk, while Commit atomically modifies it (by writing a batch of writes,
+called an Op). Apply is a no-op semantically but internally moves writes from
+the log to the data region to make space for more operations; Commit calls Apply
+internally to make space, so the caller does not have to call Apply (although
+they could, perhaps during idle periods).
+
+For performance (to minimize disk I/O and barriers), the log commits operations
+to the log without applying them, delaying Apply until the log is full.
+Committed operations are part of the abstract disk and are expected to be
+returned by reads, so the log maintains a cache of addresses that are in the log
+to make sure reads return the latest write (and without re-parsing the addresses
+on disk every time). It also maintains the disk blocks in the log to speed up
+Apply.
+
+Also for performance, if the log gets multiple concurrent commits it batches
+them into a larger "transaction" (which we call group commit).
+
+It is intended that the log almost always accept reads (accept for brief periods
+of updating in-memory data structures). It is also intended that Commits can
+always append to a list of pending transactions, so that a concurrent thread
+also committing can group commit the transaction. Finally, we make sure that
+Commit returns as soon as some thread (possibly itself) has group committed the
+new transaction.
+
+The log is structured cyclically. The valid region is at any crash point
+determined by the header, which has a start offset into the log and a and
+length. At the start of the valid region is potentially a region that is
+currently being applied; when the apply finishes, it fast-forwards the log over
+the applied space (NOTE: the code might currently incorrectly fast forward
+early, losing writes in the event of a crash). Past the end of the valid region
+is a currently-being-committed transaction (which might be grouping several
+committed operations), which will atomically be committed by updating the log
+header if the system doesn't crash.
+
+Recovery only requires restoring caches, although it might be nice to apply the
+log during recovery (partly just to exploit our fancy idempotence proofs).
+
+The on-disk layout is
+| header | address block | log (logLength blocks) | data region |
+
+The address block contains 64-bit addresses corresponding to the entries
+in the log.
+
+TODO: the concurrency control is certainly incorrect here
+
+TODO: test crash safety by trying every prefix of disk writes
+*/
+
 import (
 	"sync"
 
