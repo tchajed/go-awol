@@ -69,9 +69,6 @@ func (suite *LogSuite) CheckAll(msgAndArgs ...interface{}) {
 		suite.Check(a, "addr: %d", a)
 	}
 	suite.Check(uint64(suite.memLog.Size())-1, "addr: (last)")
-	if suite.T().Failed() {
-		suite.FailNow("check failed", msgAndArgs...)
-	}
 }
 
 func (suite *LogSuite) Crash() {
